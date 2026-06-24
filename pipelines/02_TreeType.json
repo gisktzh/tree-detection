@@ -1,0 +1,31 @@
+[
+    "input.laz",
+    {
+        "type":"filters.sort",
+        "dimension":"GpsTime",
+        "order":"ASC"
+    },
+    {
+        "type":"filters.expression",
+        "expression":"ReturnNumber < 3 && ScanAngleRank >= -20 && ScanAngleRank <= 20"
+    },
+    {
+        "type":"filters.python",
+        "script":"pipelines/compute_gap.py",
+        "function":"filter",
+        "module":"anything",
+        "add_dimension": "gapToNextReturn"
+    },
+    {
+        "type":"filters.expression",
+        "expression":"(Classification == 3 || Classification == 4 || Classification == 5) && Z >= 3 && gapToNextReturn < 25"
+    },
+    {
+        "filename": "gapToNextReturn_ab3m.tif",
+        "type": "writers.gdal",
+        "resolution": 1,
+        "data_type": "float",
+        "output_type": "mean",
+        "dimension": "gapToNextReturn"
+    }
+]

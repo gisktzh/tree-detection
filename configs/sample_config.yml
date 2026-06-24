@@ -1,0 +1,142 @@
+# Directories
+data_directory: &data_dir C:\dev\tree-detection\data
+code_directory: &code_dir C:\dev\tree-detection
+
+# Standard interpreters
+python_interpreter: &py_int C:\Users\gis\AppData\Local\conda\envs\gis\python.exe
+arcpy_interpreter: &arcpy_int C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe
+
+# 01. Prepare vegetation height model (VHM)
+vhm:
+    interpreter: *arcpy_int
+    script: !concat [*code_dir, \tasks\01_prepare_vhm.py]
+    input:
+        vhm: !concat [*data_dir, \input\rasviewer.sde\vhm]
+    output:
+        vhm: &vhm_raster !concat [*data_dir, \input\vhm.tif]
+    extent: "2668500 1223000 2717500 1284000" # Kt ZH
+    cell_size: 1 # CRS units (LV95 = m)
+
+# 02. Prepare area of interest (ZH) & grid
+aoi:
+    interpreter: *py_int
+    script: !concat [*code_dir, \tasks\02_prepare_aoi.py]
+    input:
+        aoi: https://maps.zh.ch/wfs/OGDZHWFS?SERVICE=WFS&REQUEST=GetFeature&VERSION=2.0.0&TYPENAMES=ms:ogd-0095_arv_basis_up_kanton_f&OUTPUTFORMAT=geojson
+    output:
+        aoi: &aoi !concat [*data_dir, \input\aoi.gpkg]
+        grid: &grid !concat [*data_dir, \input\grid.gpkg]
+    input_filter: "abkuerzung = 'ZH'"
+    grid_wkt_perimeter: "POLYGON ((2669000 1223500, 2717000 1223500, 2717000 1283500, 2669000 1283500, 2669000 1223500))"
+
+# 03. Prepare mask (Waldareal)
+mask:
+    interpreter: *py_int
+    script: !concat [*code_dir, \tasks\03_prepare_mask.py]
+    input:
+        forest: https://maps.zh.ch/wfs/OGDZHWFS?SERVICE=WFS&REQUEST=GetFeature&VERSION=2.0.0&TYPENAMES=ms:ogd-0111_giszhpub_wald_waldareal_f&OUTPUTFORMAT=geojson
+    output:
+        forest: &mask_layer !concat [*data_dir, \input\giszhpub_wald_waldareal_f.gpkg]
+
+# 04. Prepare swissTLM (Einzelbaum points)
+swisstlm:
+    interpreter: *py_int
+    script: !concat [*code_dir, \tasks\04_prepare_swisstlm.py]
+    input:
+        file: !concat [*data_dir, \input\swisstlm3d_2025-03_2056_5728.gpkg.zip] # Only zipped GeoPackages are currently supported
+        clip: *aoi
+    output:
+        tree_points: &swisstlm_eb !concat [*data_dir, \input\swisstlm_einzelbaum.gpkg]
+
+# 05. Copy point cloud files
+# Set &laz_dir to input.point_cloud if the data won't be copied
+point_cloud:
+    interpreter: *py_int
+    script: !concat [*code_dir, \tasks\05_copy_point_cloud.py]
+    input:
+        point_cloud: \\gis\lidar
+    output:
+        point_cloud: &laz_dir !concat [*data_dir, \input\laz]
+    max_files: null # null = all
+
+# 06. Run tree detection (watershed + swissTLM segmentation)
+detect_trees:
+    interpreter: *py_int
+    script: !concat [*code_dir, \tasks\06_detect_trees.py]
+    input:
+        vhm: *vhm_raster
+        mask: *mask_layer # Optional, null = no mask
+        aoi: *aoi
+        grid: *grid
+        swisstlm_eb: *swisstlm_eb
+    output:
+        trees: &trees_gpkg !concat [*data_dir, \intermediate\trees.gpkg]
+    smoothing_method: mean # Options: gaussian, mean (uniform), null (no smoothing)
+    gaussian_sigma: 1.2
+    mean_window_size: [3, 3]
+    minimum_veg_height: 3
+    minimum_dist_between_seeds: 2
+
+# 07. Calculate voxelized tree volume raster
+tree_vol_raster:
+    interpreter: *py_int
+    script: !concat [*code_dir, \tasks\07_calculate_volume.py]
+    input:
+        point_cloud: *laz_dir
+    output:
+        norm_z: &norm_z_dir !concat [*data_dir, \intermediate\norm_z]
+        tree_volume: &tree_volume_dir !concat [*data_dir, \intermediate\tree_volume]
+    pipeline: !concat [*code_dir, \pipelines\01_TreeVolume.json]
+    raster_length: &raster_length 500
+    max_files: null # null = all
+
+# 08. Calculate tree type probability raster
+tree_type_raster:
+    interpreter: *py_int
+    script: !concat [*code_dir, \tasks\08_calculate_tree_type.py]
+    input:
+        norm_z: *norm_z_dir
+    output:
+        tree_type: &tree_type_dir !concat [*data_dir, \intermediate\tree_type]
+    pipeline: !concat [*code_dir, \pipelines\02_TreeType.json]
+    raster_length: *raster_length
+    max_files: null # null = all
+
+# 09. Create virtual raster (VRT)
+vrt:
+    interpreter: *py_int
+    script: !concat [*code_dir, \tasks\09_build_vrt.py]
+    input:
+        tree_volume: *tree_volume_dir
+        tree_type: *tree_type_dir
+    output:
+        tree_volume: &tree_volume_vrt !concat [*tree_volume_dir, \TreeVolume.vrt]
+        tree_type: &tree_type_vrt !concat [*tree_type_dir, \TreeType.vrt]
+
+# 10. Calculate zonal statistics (height, volume, tree type)
+calculate_zonal_stats:
+    interpreter: *py_int
+    script: !concat [*code_dir, \tasks\10_calculate_stats.py]
+    input:
+        trees: *trees_gpkg
+        vhm: *vhm_raster
+        volume_raster: *tree_volume_vrt
+        tree_type_raster: *tree_type_vrt
+    output:
+        heights: !concat [*data_dir, \intermediate\baumhoehen.csv]
+        voxel: !concat [*data_dir, \intermediate\baumvolumen.csv]
+        tree_type: !concat [*data_dir, \intermediate\baumtyp.csv]
+
+# 11. Merge all data
+combine_and_postprocess:
+    interpreter: *py_int
+    script: !concat [*code_dir, \tasks\11_combine_postprocess.py]
+    input:
+        trees: !concat [*data_dir, \intermediate\trees_stats.gpkg]
+        mask: *mask_layer
+        tlm: *swisstlm_eb
+    output:
+        eb_all: !concat [*data_dir, \output\trees_final.gpkg]
+    minimum_crown_area: 6
+    maximum_tree_height: 50
+    float_rounding_precision: 3

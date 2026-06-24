@@ -1,0 +1,40 @@
+[
+    "input.laz",
+    {
+        "type":"filters.expression",
+        "expression":"(Classification == 2 || Classification == 3 || Classification == 4 || Classification == 5)"
+    },
+    {
+        "type":"filters.hag_delaunay"
+    },
+    {
+        "type":"filters.ferry",
+        "dimensions":"HeightAboveGround=>Z"
+    },
+    {
+        "type":"filters.expression",
+        "expression":"(Classification == 3 || Classification == 4 || Classification == 5) && Z >= 3"
+    },
+    {
+        "filename":"output.laz",
+        "type":"writers.las",
+        "forward":"header,scale,offset"
+    },
+    {
+        "type":"filters.voxeldownsize",
+        "cell":1.0,
+        "mode":"center"
+    },
+    {
+        "filename":"output.tif",
+        "type":"writers.gdal",
+        "resolution": 1,
+        "data_type":"uint8",
+        "nodata":0,
+        "output_type":"count",
+        "dimension":"Z",
+        "binmode":"true",
+        "width": 500,
+        "height": 500
+    }
+]

@@ -1,1 +1,11 @@
+# Python
+**/__pycache__/
 
+# Windows
+desktop.ini
+
+# Config files
+configs/config*.yml
+
+# Data folder
+data/**
